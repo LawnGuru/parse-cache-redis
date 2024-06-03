@@ -1,10 +1,10 @@
 const Parse = require('parse/node');
-const LRUCache = require('lru-cache');
 const objectHash = require('object-hash');
+const { initializeRedisClient } = require("./redis");
 
 let options = {}
 class ParseCache {
-    constructor(option = {}) {
+    constructor(option = {}, client = null) {
         options = {
             max: option.max || 500,
             maxSize: option.maxSize || 5000,
@@ -17,31 +17,27 @@ class ParseCache {
             },
             resetCacheOnSaveAndDestroy: option.resetCacheOnSaveAndDestroy || false
         };
-        this.cache = new Map();
+        this.cache = client;
     }
 
-    async get(query, cacheKey) {
-        const className = query.className;
+    async get(cacheKey) {
+        const data = await this.cache.get(cacheKey);
+        return data ? JSON.parse(data) : null;
+    }
 
-        if (!this.cache.has(className)) {
-            this.cache.set(className, new LRUCache(options));
+    async set(className, cacheKey, data) {
+        await this.cache.set(cacheKey, JSON.stringify(data));
+        await this.cache.lpush(className, cacheKey);
+    }
+
+    async clear(className) {
+        const keys = await this.cache.lrange(className, 0, -1);
+        if (keys.length > 0) {
+            await this.cache.del(keys);
         }
-
-        return this.cache.get(className)?.get(cacheKey);
+        await this.cache.del(className);
     }
 
-    set(className, cacheKey, data) {
-        if (!this.cache.has(className)) {
-            this.cache.set(className, new LRUCache(options));
-        }
-        this.cache.get(className).set(cacheKey, data);
-    }
-
-    clear(className) {
-        if (this.cache.has(className)) {
-            this.cache.delete(className);
-        }
-    }
     generateCacheKey(query, ...args) {
         const key = {
             className: query.className,
@@ -50,7 +46,6 @@ class ParseCache {
         }
         return objectHash(JSON.stringify(key));
     }
-
 }
 
 const fNames = {
@@ -69,12 +64,15 @@ const fNames = {
     subscribeCache: "subscribe"
 }
 
-function parseCacheInit(options = {}) {
-    const cache = new ParseCache(options);
+async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
+    const redisClient = await initializeRedisClient(redisConfig);
+
+    const cache = new ParseCache(options, redisClient);
     const originalSave = Parse.Object.prototype.save;
     const originalSaveAll = Parse.Object.saveAll;
     const originalDestroy = Parse.Object.prototype.destroy;
     const originalDestroyAll = Parse.Object.destroyAll;
+
     if (options.resetCacheOnSaveAndDestroy) {
         global.Parse.Object.destroyAll = async function (...args) {
             const result = await originalDestroyAll.apply(this, args);
@@ -107,166 +105,38 @@ function parseCacheInit(options = {}) {
         };
     }
 
-    //("get", "find", "findAll", "count", "distinct", "aggregate", "first", "eachBatch", "each", "map", "reduce", "filter", "subscribe")
-    global.Parse.Query.prototype.getCache = async function (objectId, options) {
-        const cacheKey = cache.generateCacheKey(this, objectId, options, fNames.getCache);
-        let cachedData = await cache.get(this, cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.get(objectId, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
+    const cacheMethods = {
+        getCache: "get",
+        findCache: "find",
+        findAllCache: "findAll",
+        countCache: "count",
+        distinctCache: "distinct",
+        aggregateCache: "aggregate",
+        firstCache: "first",
+        eachBatchCache: "eachBatch",
+        eachCache: "each",
+        mapCache: "map",
+        reduceCache: "reduce",
+        filterCache: "filter",
+        subscribeCache: "subscribe"
     };
-    global.Parse.Query.prototype.findCache = async function (options) {
-        const cacheKey = cache.generateCacheKey(this, options, fNames.findCache);
-        let cachedData = await cache.get(this, cacheKey);
 
-        if (!cachedData) {
-            cachedData = await this.find(options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
+    for (const [methodName, queryMethod] of Object.entries(cacheMethods)) {
+        global.Parse.Query.prototype[methodName] = async function (...args) {
+            const cacheKey = cache.generateCacheKey(this, ...args, queryMethod);
+            let cachedData = await cache.get(cacheKey);
 
-        return cachedData;
-    };
-    global.Parse.Query.prototype.findAllCache = async function (options) {
-        const cacheKey = cache.generateCacheKey(this, options, fNames.findAllCache);
-        let cachedData = await cache.get(this, cacheKey);
+            if (!cachedData) {
+                cachedData = await this[queryMethod](...args);
+                if (cachedData)
+                    await cache.set(this.className, cacheKey, cachedData);
+            }
 
-        if (!cachedData) {
-            cachedData = await this.findAll(options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.countCache = async function (options) {
-        const cacheKey = cache.generateCacheKey(this, options,fNames.countCache);
-        let cachedData = await cache.get(this,cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.count(options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.distinctCache = async function (key, options) {
-        const cacheKey = cache.generateCacheKey(this, key, options, fNames.distinctCache);
-        let cachedData = await cache.get(this,cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.distinct(key, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.aggregateCache = async function (pipeline, options) {
-        const cacheKey = cache.generateCacheKey(this, pipeline, options, fNames.aggregateCache);
-        let cachedData = await cache.get(this,cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.aggregate(pipeline, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.firstCache = async function (options) {
-        const cacheKey = cache.generateCacheKey(this, options, fNames.firstCache);
-        let cachedData = await cache.get(this,cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.first(options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.eachBatchCache = async function (callback, options) {
-        const cacheKey = cache.generateCacheKey(this, callback, options, fNames.eachBatchCache);
-        let cachedData = await cache.get(this,cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.eachBatch(callback, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.eachCache = async function (callback, options) {
-        const cacheKey = cache.generateCacheKey(this, callback, options, fNames.eachCache);
-        let cachedData = await cache.get(this, cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.each(callback, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.mapCache = async function (callback, options) {
-        const cacheKey = cache.generateCacheKey(this, callback, options, fNames.mapCache);
-        let cachedData = await cache.get(this,cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.map(callback, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.reduceCache = async function (callback, initialValue, options) {
-        const cacheKey = cache.generateCacheKey(this, callback, initialValue, options, fNames.reduceCache);
-        let cachedData = await cache.get(this, cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.reduce(callback, initialValue, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.filterCache = async function (callback, options) {
-        const cacheKey = cache.generateCacheKey(this, callback, options, fNames.filterCache);
-        let cachedData = await cache.get(this, cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.filter(callback, options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
-    global.Parse.Query.prototype.subscribeCache = async function (options) {
-        const cacheKey = cache.generateCacheKey(this, options, fNames.subscribeCache);
-        let cachedData = await cache.get(this, cacheKey);
-
-        if (!cachedData) {
-            cachedData = await this.subscribe(options);
-            if (cachedData)
-                cache.set(this.className, cacheKey, cachedData);
-        }
-
-        return cachedData;
-    };
+            return cachedData;
+        };
+    }
 
     return cache;
 }
 
-
-module.exports = { parseCacheInit }
+module.exports = { parseCacheInit };
