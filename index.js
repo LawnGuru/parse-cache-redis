@@ -6,32 +6,33 @@ let options = {}
 class ParseCache {
     constructor(option = {}, client = null) {
         options = {
-            max: option.max || 500,
-            maxSize: option.maxSize || 5000,
-            ttl: option.ttl || 1000 * 60 * 5,
-            allowStale: option.allowStale || false,
-            updateAgeOnGet: option.updateAgeOnGet || false,
-            updateAgeOnHas: option.updateAgeOnHas || false,
-            sizeCalculation: (value, key) => {
-                return 1
-            },
-            resetCacheOnSaveAndDestroy: option.resetCacheOnSaveAndDestroy || false
+            ttl: option.ttl || 1000 * 60 * 5, // Default TTL in milliseconds
         };
         this.cache = client;
     }
 
-    async get(cacheKey) {
+    async get(cacheKey, className) {
         const data = await this.cache.get(cacheKey);
-        return data ? JSON.parse(data) : null;
+        if (data) {
+            const parsedData = JSON.parse(data);
+            if (Array.isArray(parsedData)) {
+                return parsedData.map(item => Parse.Object.fromJSON({...JSON.parse(item), className}));
+            } else {
+                return Parse.Object.fromJSON({...parsedData, className});
+            }
+        }
+        return null;
     }
 
     async set(className, cacheKey, data) {
-        await this.cache.set(cacheKey, JSON.stringify(data));
-        await this.cache.lpush(className, cacheKey);
+        const jsonData = Array.isArray(data) ? data.map(item => JSON.stringify(item)) : JSON.stringify(data);
+        await this.cache.setEx(cacheKey, options.ttl / 1000, JSON.stringify(jsonData));// in seconds
+        await this.cache.lPush(className, cacheKey);
+
     }
 
     async clear(className) {
-        const keys = await this.cache.lrange(className, 0, -1);
+        const keys = await this.cache.lRange(className, 0, -1);
         if (keys.length > 0) {
             await this.cache.del(keys);
         }
@@ -124,14 +125,13 @@ async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
     for (const [methodName, queryMethod] of Object.entries(cacheMethods)) {
         global.Parse.Query.prototype[methodName] = async function (...args) {
             const cacheKey = cache.generateCacheKey(this, ...args, queryMethod);
-            let cachedData = await cache.get(cacheKey);
+            let cachedData = await cache.get(cacheKey, this.className);
 
             if (!cachedData) {
                 cachedData = await this[queryMethod](...args);
                 if (cachedData)
                     await cache.set(this.className, cacheKey, cachedData);
             }
-
             return cachedData;
         };
     }
