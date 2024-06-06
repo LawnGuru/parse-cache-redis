@@ -11,21 +11,21 @@ class ParseCache {
         this.cache = client;
     }
 
-    async get(cacheKey, className) {
+    async get(cacheKey) {
         const data = await this.cache.get(cacheKey);
         if (data) {
             const parsedData = JSON.parse(data);
             if (Array.isArray(parsedData)) {
-                return parsedData.map(item => Parse.Object.fromJSON({...JSON.parse(item), className}));
+                return parsedData.map(item => Parse.Object.fromJSON(item));
             } else {
-                return Parse.Object.fromJSON({...parsedData, className});
+                return Parse.Object.fromJSON(parsedData);
             }
         }
         return null;
     }
 
     async set(className, cacheKey, data) {
-        const jsonData = Array.isArray(data) ? data.map(item => JSON.stringify(item)) : JSON.stringify(data);
+        const jsonData = Array.isArray(data) ? data.map(item => this.prepareToCache(item)) : this.prepareToCache(data);
         await this.cache.setEx(cacheKey, options.ttl / 1000, JSON.stringify(jsonData));// in seconds
         await this.cache.lPush(className, cacheKey);
 
@@ -38,6 +38,16 @@ class ParseCache {
         }
         await this.cache.del(className);
     }
+
+    prepareToCache(object) {
+        const json = object.toJSON();
+        json.className = object.className;
+        if (object.createdAt) json.createdAt = object.createdAt.toISOString();
+        if (object.updatedAt) json.updatedAt = object.updatedAt.toISOString();
+        if (object.ACL) json.ACL = object.getACL().toJSON();
+        return json;
+    }
+
 
     generateCacheKey(query, ...args) {
         const key = {
@@ -74,37 +84,34 @@ async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
     const originalDestroy = Parse.Object.prototype.destroy;
     const originalDestroyAll = Parse.Object.destroyAll;
 
-    if (options.resetCacheOnSaveAndDestroy) {
-        global.Parse.Object.destroyAll = async function (...args) {
-            const result = await originalDestroyAll.apply(this, args);
-            if (result) {
-                // Clear cache
-                cache.clear(result[0].className);
-                return result;
-            }
-        }
-        global.Parse.Object.prototype.destroy = async function (...args) {
-            const result = await originalDestroy.apply(this, args);
+    global.Parse.Object.destroyAll = async function (...args) {
+        const result = await originalDestroyAll.apply(this, args);
+        if (result) {
             // Clear cache
-            cache.clear(this.className);
+            cache.clear(result[0].className);
             return result;
-        };
-        global.Parse.Object.saveAll = async function (...args) {
-            const result = await originalSaveAll.apply(this, args);
-            if (result) {
-                // Clear cache
-                cache.clear(result[0].className);
-                return result;
-            }
         }
-        global.Parse.Object.prototype.save = async function (...args) {
-            // const result = await originalSave.apply(this, args);
-            const result = await originalSave.call(this, ...args);
-            // Clear cache
-            cache.clear(this.className);
-            return result;
-        };
     }
+    global.Parse.Object.prototype.destroy = async function (...args) {
+        const result = await originalDestroy.apply(this, args);
+        // Clear cache
+        cache.clear(this.className);
+        return result;
+    };
+    global.Parse.Object.saveAll = async function (...args) {
+        const result = await originalSaveAll.apply(this, args);
+        if (result) {
+            // Clear cache
+            cache.clear(result[0].className);
+            return result;
+        }
+    }
+    global.Parse.Object.prototype.save = async function (...args) {
+        const result = await originalSave.call(this, ...args);
+        // Clear cache
+        cache.clear(this.className);
+        return result;
+    };
 
     const cacheMethods = {
         getCache: "get",
