@@ -59,22 +59,6 @@ class ParseCache {
     }
 }
 
-const fNames = {
-    getCache: "get",
-    findCache: "find",
-    findAllCache: "findAll",
-    countCache: "count",
-    distinctCache: "distinct",
-    aggregateCache: "aggregate",
-    firstCache: "first",
-    eachBatchCache: "eachBatch",
-    eachCache: "each",
-    mapCache: "map",
-    reduceCache: "reduce",
-    filterCache: "filter",
-    subscribeCache: "subscribe"
-}
-
 async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
     const redisClient = await initializeRedisClient(redisConfig);
 
