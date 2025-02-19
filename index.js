@@ -64,38 +64,89 @@ async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
 
     const cache = new ParseCache(options, redisClient);
     const originalSave = Parse.Object.prototype.save;
-    const originalSaveAll = Parse.Object.saveAll;
     const originalDestroy = Parse.Object.prototype.destroy;
+    const originalSaveAll = Parse.Object.saveAll;
     const originalDestroyAll = Parse.Object.destroyAll;
+
+    global.Parse.Object.prototype.destroy = async function (...args) {
+        if (this.get('Customer')) {
+            const listKey = `${this.className}${this.get('Customer').id}`         
+            cache.clear(listKey);
+        }
+        if (this.get('Provider')) {
+            const listKey = `${this.className}${this.get('Provider').id}`         
+            cache.clear(listKey);
+        }
+        const result = await originalDestroy.apply(this, args);
+        return result;
+    };
+    
+    global.Parse.Object.prototype.save = async function (...args) {
+        // Clear cache
+        if (this.get('Customer')) {
+            const listKey = `${this.className}${this.get('Customer').id}`         
+            cache.clear(listKey);
+        }
+        if (this.get('Provider')) {
+            const listKey = `${this.className}${this.get('Provider').id}`         
+            cache.clear(listKey);
+        }        
+        const result = await originalSave.call(this, ...args);
+        return result;
+    };
 
     global.Parse.Object.destroyAll = async function (...args) {
         const result = await originalDestroyAll.apply(this, args);
         if (result) {
             // Clear cache
-            cache.clear(result[0].className);
+            try {
+                result.map(obj => {
+                    if (obj.get('Customer') && obj.get('Customer').id) {
+                        const listKey = `${obj.className}${obj.get('Customer').id}`         
+                        cache.clear(listKey);
+                    }
+                    if (obj.get('Provider') && obj.get('Provider').id) {
+                        const listKey = `${obj.className}${obj.get('Provider').id}`         
+                        cache.clear(listKey);
+                    }
+                })
+            } catch (e) {
+
+            }
             return result;
         }
     }
-    global.Parse.Object.prototype.destroy = async function (...args) {
-        const result = await originalDestroy.apply(this, args);
-        // Clear cache
-        cache.clear(this.className);
-        return result;
-    };
+
     global.Parse.Object.saveAll = async function (...args) {
         const result = await originalSaveAll.apply(this, args);
         if (result) {
             // Clear cache
-            cache.clear(result[0].className);
+            try {
+
+                result.map(obj => {
+                    if (obj.get('Customer') && obj.get('Customer').id) {
+                        const listKey = `${obj.className}${obj.get('Customer').id}`         
+                        cache.clear(listKey);
+                    }
+                    if (obj.get('Provider') && obj.get('Provider').id) {
+                        const listKey = `${obj.className}${obj.get('Provider').id}`         
+                        cache.clear(listKey);
+                    }
+                })
+
+            } catch(e) {
+
+            }
             return result;
         }
     }
-    global.Parse.Object.prototype.save = async function (...args) {
-        const result = await originalSave.call(this, ...args);
-        // Clear cache
-        cache.clear(this.className);
-        return result;
-    };
+
+
+    // clear cache manually
+    global.Parse.Query.cleanCache = async function (className, userId) {
+        const listKey = `${className}${userId}`         
+        cache.clear(listKey);
+    }
 
     const cacheMethods = {
         getCache: "get",
@@ -111,17 +162,18 @@ async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
         reduceCache: "reduce",
         filterCache: "filter",
         subscribeCache: "subscribe"
-    };
+    }
 
     for (const [methodName, queryMethod] of Object.entries(cacheMethods)) {
         global.Parse.Query.prototype[methodName] = async function (...args) {
+            const listKey = `${this.className}${args[1].user}`
             const cacheKey = cache.generateCacheKey(this, ...args, queryMethod);
-            let cachedData = await cache.get(cacheKey, this.className);
+            let cachedData = await cache.get(cacheKey, listKey);
 
             if (!cachedData) {
                 cachedData = await this[queryMethod](...args);
                 if (cachedData)
-                    await cache.set(this.className, cacheKey, cachedData);
+                    await cache.set(listKey, cacheKey, cachedData);
             }
             return cachedData;
         };
