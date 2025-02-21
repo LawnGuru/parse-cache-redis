@@ -26,13 +26,13 @@ class ParseCache {
 
     async set(className, cacheKey, data) {
         const jsonData = Array.isArray(data) ? data.map(item => this.prepareToCache(item)) : this.prepareToCache(data);
-        await this.cache.setEx(cacheKey, options.ttl / 1000, JSON.stringify(jsonData));// in seconds
-        await this.cache.lPush(className, cacheKey);
+        await this.cache.set(cacheKey, JSON.stringify(jsonData), 'EX', options.ttl / 1000);// in seconds
+        await this.cache.lpush(className, cacheKey);
 
     }
 
     async clear(className) {
-        const keys = await this.cache.lRange(className, 0, -1);
+        const keys = await this.cache.lrange(className, 0, -1);
         if (keys.length > 0) {
             await this.cache.del(keys);
         }
