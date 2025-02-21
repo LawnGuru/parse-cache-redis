@@ -3,6 +3,17 @@ async function initializeRedisClient(redisConfig) {
     // read the Redis connection URL from the envs
     if (redisConfig) {
       // create the Redis client object
+      if (redisConfig.cluster) {
+
+        const cluster = redis.createCluster({ rootNodes: redisConfig.urls });
+
+        cluster.on('error', (err) => console.log('Redis Cluster Error', err));
+
+        await cluster.connect();
+
+        return cluster;
+      }
+
       try {
         const redisClient = redis.createClient(redisConfig).on("error", (e) => {
           console.error(`Failed to create the Redis client with error:`);
