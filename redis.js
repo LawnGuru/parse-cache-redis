@@ -10,6 +10,7 @@ async function initializeRedisClient(redisConfig) {
         cluster.on('error', (err) => console.log('Redis Cluster Error', err));
 
         await cluster.connect();
+        console.log(`Connected to Redis successfully!`);
 
         return cluster;
       }
