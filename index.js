@@ -59,7 +59,7 @@ class ParseCache {
     }
 }
 
-async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
+async function parseCacheInit(options = {}, redisConfig) {
     const redisClient = await initializeRedisClient(redisConfig);
 
     const cache = new ParseCache(options, redisClient);
@@ -163,6 +163,7 @@ async function parseCacheInit(options = {}, redisConfig = { url: "" }) {
         filterCache: "filter",
         subscribeCache: "subscribe"
     }
+
 
     for (const [methodName, queryMethod] of Object.entries(cacheMethods)) {
         global.Parse.Query.prototype[methodName] = async function (...args) {
