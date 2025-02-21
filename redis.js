@@ -1,39 +1,36 @@
-const redis = require('redis');
+const Redis = require('ioredis');
+
 async function initializeRedisClient(redisConfig) {
-    // read the Redis connection URL from the envs
-    if (redisConfig) {
-      // create the Redis client object
-      if (redisConfig.cluster) {
+    if (!redisConfig) {
+        throw new Error('Redis configuration is required');
+    }
 
-        const cluster = redis.createCluster({ rootNodes: redisConfig.urls });
+    try {
+        if (redisConfig.cluster) {
+            const cluster = new Redis.Cluster( [{ host: redisConfig.host, port: redisConfig.port }],
+              {
+                dnsLookup: (address, callback) => callback(null, address),
+                redisOptions: {
+                  tls: {},
+                },
+              });
 
-        cluster.on('error', (err) => console.log('Redis Cluster Error', err));
+            cluster.on('error', (err) => console.error('Redis Cluster Error', err));
+            
+            console.log('Connected to Redis Cluster successfully!');
+            return cluster;
+        } else {
+            const redisClient = new Redis(redisConfig);
 
-        await cluster.connect();
-        console.log(`Connected to Redis successfully!`);
+            redisClient.on('error', (err) => console.error('Redis Error:', err));
+            redisClient.on('connect', () => console.log('Connected to Redis successfully!'));
 
-        return cluster;
-      }
-
-      try {
-        const redisClient = redis.createClient(redisConfig).on("error", (e) => {
-          console.error(`Failed to create the Redis client with error:`);
-          console.error(e);
-        });
-  
-        try {
-          // connect to the Redis server
-          await redisClient.connect();
-          console.log(`Connected to Redis successfully!`);
-          return redisClient;
-        } catch (e) {
-          console.error(`Connection to Redis failed with error:`);
-          console.error(e);
+            return redisClient;
         }
-      } catch (e) {
-        console.log('e', e)
-      }
+    } catch (error) {
+        console.error('Failed to initialize Redis client:', error);
+        throw error;
     }
 }
 
-exports.initializeRedisClient = initializeRedisClient;
+module.exports = { initializeRedisClient };
